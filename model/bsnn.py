@@ -1,6 +1,9 @@
 from torch.nn import Module, Sequential, Conv2d, MaxPool2d, Flatten, Linear
 
-DEFAULT_CONFIG_VALUES = {
+from snntorch import Leaky
+from snntorch.surrogate import atan
+
+DEFAULT_BSNN_CONFIG_VALUES = {
     'num_blocks': 2,        
     'num_classes': 10,
     'img_dimension': 28,
@@ -16,17 +19,17 @@ DEFAULT_CONFIG_VALUES = {
 
 def prepare_config(config):
     if config is None:
-        return DEFAULT_CONFIG_VALUES.copy()
+        return DEFAULT_BSNN_CONFIG_VALUES.copy()
     
     prepared_config = config.copy()
     
-    for key, value in DEFAULT_CONFIG_VALUES.items():
+    for key, value in DEFAULT_BSNN_CONFIG_VALUES.items():
         prepared_config.setdefault(key, value)
         
     return prepared_config
 
 
-class SNN(Module):
+class BSNN(Module):
     def __init__(self, config=None):
         super().__init__()
         
@@ -71,7 +74,7 @@ class SNN(Module):
         return in_feat_map_size
     
     
-    def _add_block(self, block_idx):
+    def _add_block(self, block_idx, activation_threshold=0.5):
         conv_in_size = self._calc_pool_channel_in_size(block_idx)
         conv_out_size = self._calc_pool_channel_out_size(block_idx)
         
@@ -89,10 +92,16 @@ class SNN(Module):
             stride=self.config['pool_stride_size'],
         ))
         
+        self.layers.add_module(f'relu{block_idx}', Leaky(
+            beta=activation_threshold, 
+            spike_grad=atan,
+            init_hidden=True
+        ))
+        
         return conv_out_size
 
 
-    def _add_output_layer(self, in_channel_size):        
+    def _add_output_layer(self, in_channel_size, activation_threshold=0.5):        
         feat_map_size = self._calc_feat_map_size(
             num_blocks=self.config['num_blocks'], 
             in_feat_map_size=self.config['img_dimension'],
@@ -102,6 +111,13 @@ class SNN(Module):
         self.layers.add_module('output', Linear(
             in_features=in_channel_size * (feat_map_size ** 2),
             out_features=self.config['num_classes'],
+        ))
+        
+        self.layers.add_module('relu_out', Leaky(
+            beta=activation_threshold, 
+            spike_grad=atan,
+            init_hidden=True,
+            output=True
         ))
     
     
