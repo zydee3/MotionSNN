@@ -1,4 +1,4 @@
-from torch.nn import Module, Sequential, Conv2d, MaxPool2d, Flatten, Linear
+from torch.nn import Module, Sequential, Conv2d, MaxPool2d, Flatten, Linear, Dropout
 
 from snntorch import Leaky
 from snntorch.surrogate import atan
@@ -101,7 +101,7 @@ class BSNN(Module):
         return conv_out_size
 
 
-    def _add_output_layer(self, in_channel_size, activation_threshold=0.5):        
+    def _add_output_layer(self, in_channel_size, activation_threshold=0.4, dropout_rate=0.25):        
         feat_map_size = self._calc_feat_map_size(
             num_blocks=self.config['num_blocks'], 
             in_feat_map_size=self.config['img_dimension'],
@@ -113,7 +113,9 @@ class BSNN(Module):
             out_features=self.config['num_classes'],
         ))
         
-        self.layers.add_module('relu_out', Leaky(
+        self.layers.add_module('dropout', Dropout(dropout_rate))
+        
+        self.layers.add_module('leaky_out', Leaky(
             beta=activation_threshold, 
             spike_grad=atan,
             init_hidden=True,

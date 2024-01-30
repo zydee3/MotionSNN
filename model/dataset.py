@@ -9,6 +9,7 @@ DEFAULT_LOADER_CONFIG_VALUES = {
     'label_csv_path': './train/DVSGesture/gesture_mapping.csv',
     'batch_size': 32,
     'use_data_cache': True,
+    'transform': None,
 }
 
 def prepare_loader_config(config):
@@ -23,21 +24,29 @@ def prepare_loader_config(config):
     return prepared_config
 
 
-def load_data_loader(data_path, data_cache_path, batch_size, cache):
-    dataset = tonic.datasets.DVSGesture(save_to=data_path)
+def load_data_loader(config, is_training_set):
+    dataset = tonic.datasets.DVSGesture(
+        save_to=config['data_path'], 
+        train=is_training_set, 
+        transform=config['transform']
+    )
     
-    if cache:
-        cached_trainset = DiskCachedDataset(dataset, cache_path=data_cache_path)
+    if config['use_data_cache']:
+        cached_trainset = DiskCachedDataset(
+            dataset, 
+            cache_path=config['data_cache_path']
+        )
+        
         return DataLoader(cached_trainset)
     else:
         return DataLoader(dataset)
 
 
-def load_data_labels(label_csv_path):
+def load_data_labels(config):
     labels = []
     
     try:
-        dataset_map_file = open(label_csv_path, "r")
+        dataset_map_file = open(config['label_csv_path'], "r")
         dataset_map_file.readline()
         
         for line in dataset_map_file:
@@ -49,23 +58,14 @@ def load_data_labels(label_csv_path):
             
             labels[label] = gesture
     except FileNotFoundError:
-        raise FileNotFoundError(f"File not found at path: {label_csv_path}")
+        raise FileNotFoundError(f"File not found at path: {config['label_csv_path']}")
     
     return labels
 
 
 def load(config):
-    config = prepare_loader_config(config)
-    
-    loader = load_data_loader(
-        config['data_path'],
-        config['data_cache_path'],
-        config['batch_size'],
-        config['use_data_cache'],
-    )
-    
-    labels = load_data_labels(
-        config['label_csv_path']
-    )
-    
-    return loader, labels
+    config = prepare_loader_config(config)  
+    train_loader = load_data_loader(config=config, is_training_set=True)
+    test_loader = load_data_loader(config=config, is_training_set=False)
+    label_map = load_data_labels(config=config)
+    return train_loader, test_loader, label_map
