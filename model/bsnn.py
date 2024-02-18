@@ -1,4 +1,4 @@
-from torch.nn import Module, Sequential, Conv2d, MaxPool2d, Flatten, Linear, Dropout
+from torch.nn import Module, Sequential, Conv2d, MaxPool2d, Flatten, Linear, Dropout, init, F, Function
 
 from snntorch import Leaky
 from snntorch.surrogate import atan
@@ -28,6 +28,48 @@ def prepare_config(config):
         
     return prepared_config
 
+
+class Binarize(Function):
+  @staticmethod
+  def forward(weight_ref, inpt):
+    return inpt.sign().clamp(min=-1)
+
+  @staticmethod
+  def backward(weight_ref, gradient_out):
+    gradient_in = gradient_out.clone()
+    return gradient_in
+
+
+class BinaryConv2d(Conv2d):
+  def __init__(self, *kargs, **kwargs):
+    super(BinaryConv2d, self).__init__(*kargs, **kwargs)
+
+  def forward(self, inpt):
+    binarized_weights = Binarize.apply(self.weight)
+    return F.conv2d(inpt, binarized_weights)
+
+  def reset_params(self):
+    init.xavier_normal_(self.weight)
+    if self.bias is not None:
+      init.constant(self.bias, 0)
+
+
+class BinaryLinear(Linear):
+  def __init__(self, *kargs, **kwargs):
+    super(BinaryLinear, self).__init__(*kargs, **kwargs)
+
+    def forward(self, inpt):
+        bin_weights = Binarize.apply(self.weight)
+        if self.bias is None:
+            return F.linear(inpt, bin_weights)
+        else:
+            return F.linear(inpt, bin_weights, self.bias)
+
+    def reset_parameters(self):
+        init.xavier_normal_(self.weight)
+        if self.bias is not None:
+            init.constant_(self.bias, 0)
+            
 
 class BSNN(Module):
     def __init__(self, config=None):
@@ -78,7 +120,7 @@ class BSNN(Module):
         conv_in_size = self._calc_pool_channel_in_size(block_idx)
         conv_out_size = self._calc_pool_channel_out_size(block_idx)
         
-        self.layers.add_module(f'conv{block_idx}', Conv2d(
+        self.layers.add_module(f'conv{block_idx}', BinaryConv2d(
             in_channels=conv_in_size,
             out_channels=conv_out_size,
             kernel_size=self.config['conv_kernel_size'],
@@ -108,7 +150,7 @@ class BSNN(Module):
         )
         
         self.layers.add_module('flatten', Flatten())
-        self.layers.add_module('output', Linear(
+        self.layers.add_module('output', BinaryLinear(
             in_features=in_channel_size * (feat_map_size ** 2),
             out_features=self.config['num_classes'],
         ))
@@ -129,3 +171,19 @@ class BSNN(Module):
             
             if block_idx == self.config['num_blocks'] - 1:
                 self._add_output_layer(out_size)
+                
+
+    def forward(self, input):
+        input = input.float()
+        batch_size, time_bins, polarities, height, width = input.size()
+        
+        input = input.view(batch_size * time_bins, polarities, height, width)
+        
+        for layer in self.layers:
+            if isinstance(layer, Leaky):
+                layer.init_leaky()
+        
+        spike_rec = []
+        mem_rec = []
+        
+        
