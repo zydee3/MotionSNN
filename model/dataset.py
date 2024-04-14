@@ -1,45 +1,22 @@
 import tonic
+import numpy as np
 from tonic import DiskCachedDataset
 from torch.utils.data import DataLoader
 
-
-DEFAULT_LOADER_CONFIG_VALUES = {
-    'data_path': './train/DVSGesture',
-    'data_cache_path': './cache/DVSGesture',
-    'label_csv_path': './train/DVSGesture/gesture_mapping.csv',
-    'batch_size': 32,
-    'use_data_cache': True,
-    'transform': None,
-}
-
-def prepare_loader_config(config):
-    if config is None:
-        return DEFAULT_LOADER_CONFIG_VALUES.copy()
-    
-    prepared_config = config.copy()
-    
-    for key, value in DEFAULT_LOADER_CONFIG_VALUES.items():
-        prepared_config.setdefault(key, value)
-        
-    return prepared_config
+from tonic.transforms import ToFrame
+from tonic.datasets import DVSGesture
 
 
-def load_data_loader(config, is_training_set):
+from model.config import prepare_config, DEFAULT_LOADER_CONFIG_VALUES
+
+def load_dataset(config, is_training_set=True, transform=None):
     dataset = tonic.datasets.DVSGesture(
         save_to=config['data_path'], 
-        train=is_training_set, 
-        transform=config['transform']
+        transform=transform,
+        train=is_training_set
     )
     
-    if config['use_data_cache']:
-        cached_trainset = DiskCachedDataset(
-            dataset, 
-            cache_path=config['data_cache_path']
-        )
-        
-        return DataLoader(cached_trainset)
-    else:
-        return DataLoader(dataset)
+    return dataset
 
 
 def load_data_labels(config):
@@ -63,9 +40,43 @@ def load_data_labels(config):
     return labels
 
 
-def load(config):
-    config = prepare_loader_config(config)  
-    train_loader = load_data_loader(config=config, is_training_set=True)
-    test_loader = load_data_loader(config=config, is_training_set=False)
-    label_map = load_data_labels(config=config)
-    return train_loader, test_loader, label_map
+def normalize_frames(frames, lower=5, upper=95):
+    lower_percentile = np.percentile(frames, lower)
+    upper_percentile = np.percentile(frames, upper)
+    
+    if upper_percentile <= lower_percentile:
+        upper_percentile = max(upper_percentile + 1e-3, lower_percentile + 1e-2)
+    
+
+    frames_normalized = (frames - lower_percentile) / (upper_percentile - lower_percentile)
+    frames_normalized = np.clip(frames_normalized, 0, 1)  
+    
+    return frames_normalized
+
+
+def to_frames(events):
+     # creates dense frames from events by binning them in different ways
+    frame_transform = ToFrame(
+        sensor_size=DVSGesture.sensor_size,
+        n_time_bins=100)
+    
+    return frame_transform(events)
+
+
+def to_cache(config, dataset):
+    if config['use_data_cache'] is False: 
+        print("Warning: Data caching is disabled. Original dataset will be used.")
+        return dataset
+    else:
+        return DiskCachedDataset(
+            dataset,
+            cache_path=config['data_cache_path'],
+        )
+    
+    
+def load(config, transform=None):
+    config = prepare_config(config, DEFAULT_LOADER_CONFIG_VALUES)
+    train = load_dataset(config=config, is_training_set=True, transform=transform)
+    test = load_dataset(config=config, is_training_set=False, transform=transform)
+    labels = load_data_labels(config=config)
+    return train, test, labels
